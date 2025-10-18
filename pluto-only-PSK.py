@@ -649,35 +649,476 @@ def find_best_params_for_M(M_list, sps_candidates, N_candidates, fs_candidates,
 
 # ------------------------------ Main guard --------------------------------
 if __name__ == "__main__":
-    # 1) Run single-frame demo and show its constellation/correlation plots
-    demo_results = run_single_frame_demo(Nbits=2000, M=16, sps=8, fs=1e6, seed=1)
+    # Instead of running everything automatically, present a simple GUI
+    # so the user can choose which sweeps/demos to run and tweak their
+    # parameters (prefilled with the function signature defaults).
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    import threading
 
-    # 2) Example sweeps for the five objectives (note: each monte_carlo trial
-    # transmits/receives a frame on the Pluto, so keep n_trials modest for speed).
-    fs = 1e6
-    M = 16
-    Nbits = 2000
+    def parse_list(s, cast=int):
+        """Parse a comma/space/semicolon separated list into Python list with casting.
+        Empty string -> empty list.
+        """
+        if s is None:
+            return []
+        s = str(s).strip()
+        if s == "":
+            return []
+        # allow both commas and whitespace
+        parts = []
+        for p in s.replace(';', ',').split(','):
+            p = p.strip()
+            if not p:
+                continue
+            # if contains whitespace-separated values inside a comma token
+            if any(c.isspace() for c in p) and ',' not in p:
+                for q in p.split():
+                    if q:
+                        parts.append(q)
+            else:
+                parts.append(p)
+        out = []
+        for p in parts:
+            try:
+                out.append(cast(p))
+            except Exception:
+                # try float->cast int if needed
+                try:
+                    val = float(p)
+                    out.append(cast(val))
+                except Exception:
+                    raise ValueError(f'Could not parse list element: {p}')
+        return out
 
-    # Objective (i): SER vs sps
-    sps_list = [1, 2, 4, 8, 16]
-    plot_ser_vs_sps(fs=fs, M=M, Nbits=Nbits, sps_list=sps_list, n_trials=60)
+    def parse_list_float(s):
+        if s is None:
+            return []
+        s = str(s).strip()
+        if s == "":
+            return []
+        parts = [p.strip() for p in s.replace(';', ',').split(',') if p.strip()]
+        return [float(p) for p in parts]
 
-    # Objective (ii): SER vs sync length
-    sync_len_list = [8, 13, 26, 52]
-    plot_ser_vs_sync_len(fs=fs, M=M, Nbits=Nbits, sync_len_list=sync_len_list, sps=8, n_trials=60)
+    def parse_sync_barker(s):
+        # Accept 'None' or 'default' to indicate using default; otherwise parse ints
+        if s is None:
+            return None
+        ss = str(s).strip()
+        if ss == '' or ss.lower() in ('none', 'default'):
+            return None
+        parts = [p.strip() for p in ss.replace(';', ',').split(',') if p.strip()]
+        arr = []
+        for p in parts:
+            try:
+                arr.append(int(p))
+            except Exception:
+                raise ValueError(f'Invalid sync barker element: {p}')
+        return np.array(arr, dtype=int)
 
-    # Objective (iii): SER vs modulation order M
-    plot_ser_vs_M(fs=fs, M_list=[2, 4, 8, 16, 32], Nbits=1000, sps=8, n_trials=60)
+    root = tk.Tk()
+    root.title('Pluto M-PSK Demo — Select Runs & Parameters')
 
-    # Objective (iv): SER vs number of data symbols N
-    plot_ser_vs_N(fs=fs, M=M, sps=8, N_list=[500, 1000, 2000, 4000], n_trials=60)
+    mainframe = ttk.Frame(root, padding=10)
+    mainframe.grid(row=0, column=0, sticky='nsew')
 
-    # Objective (v): coarse search for best params
-    results = find_best_params_for_M(M_list=[4, 16], sps_candidates=[2, 4, 8], N_candidates=[1000, 2000], fs_candidates=[1e6, 2e6], n_trials=40)
-    print("Best combos (per M):")
-    for Mkey, combos in results.items():
-        print(f"M={Mkey}")
-        for ser, sps_v, N_v, fs_v, Rs_v in combos:
-            print(f"  SER={ser:.4e} sps={sps_v} N={N_v} fs={fs_v:.2e} Rs={Rs_v:.2f}")
+    # Configure resizing
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
 
-    plt.show()
+    # Section helper
+    def section(title, row):
+        lbl = ttk.Label(mainframe, text=title, font=(None, 10, 'bold'))
+        lbl.grid(row=row, column=0, sticky='w', pady=(8, 2), columnspan=6)
+        return row + 1
+
+    r = 0
+    r = section('Select which routines to run (tick and edit parameters as needed)', r)
+
+    # ------------------ run_single_frame_demo parameters ------------------
+    run_demo_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Run single-frame demo', variable=run_demo_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    # Defaults as in function signature
+    demo_defaults = dict(Nbits=4000, M=16, sps=8, fs=1e6, sync_barker13='None', ch_pilot_len_bits=128, seed='None', pluto_ip=PLUTO_IP)
+
+    ttk.Label(mainframe, text='Nbits:').grid(row=r, column=0, sticky='e')
+    demo_Nbits = ttk.Entry(mainframe, width=12)
+    demo_Nbits.insert(0, str(demo_defaults['Nbits']))
+    demo_Nbits.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
+    demo_M = ttk.Entry(mainframe, width=8)
+    demo_M.insert(0, str(demo_defaults['M']))
+    demo_M.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='sps:').grid(row=r, column=4, sticky='e')
+    demo_sps = ttk.Entry(mainframe, width=8)
+    demo_sps.insert(0, str(demo_defaults['sps']))
+    demo_sps.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    demo_fs = ttk.Entry(mainframe, width=14)
+    demo_fs.insert(0, str(int(demo_defaults['fs'])))
+    demo_fs.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='sync_barker13 (None or comma list):').grid(row=r, column=2, sticky='e')
+    demo_sync = ttk.Entry(mainframe, width=28)
+    demo_sync.insert(0, demo_defaults['sync_barker13'])
+    demo_sync.grid(row=r, column=3, columnspan=3, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=0, sticky='e')
+    demo_chpilot = ttk.Entry(mainframe, width=12)
+    demo_chpilot.insert(0, str(demo_defaults['ch_pilot_len_bits']))
+    demo_chpilot.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='seed (int or None):').grid(row=r, column=2, sticky='e')
+    demo_seed = ttk.Entry(mainframe, width=12)
+    demo_seed.insert(0, demo_defaults['seed'])
+    demo_seed.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='pluto_ip:').grid(row=r, column=4, sticky='e')
+    demo_pluto_ip = ttk.Entry(mainframe, width=20)
+    demo_pluto_ip.insert(0, demo_defaults['pluto_ip'])
+    demo_pluto_ip.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    # ------------------ plot_ser_vs_sps parameters ------------------
+    run_sps_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Plot SER vs sps', variable=run_sps_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    # Defaults from function signature
+    sps_defaults = '1,2,4,8,16'
+    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    sps_fs = ttk.Entry(mainframe, width=14)
+    sps_fs.insert(0, str(int(1e6)))
+    sps_fs.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
+    sps_M = ttk.Entry(mainframe, width=8)
+    sps_M.insert(0, '16')
+    sps_M.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='Nbits:').grid(row=r, column=4, sticky='e')
+    sps_Nbits = ttk.Entry(mainframe, width=12)
+    sps_Nbits.insert(0, '4000')
+    sps_Nbits.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='sps_list (comma sep):').grid(row=r, column=0, sticky='e')
+    sps_entry = ttk.Entry(mainframe, width=36)
+    sps_entry.insert(0, sps_defaults)
+    sps_entry.grid(row=r, column=1, columnspan=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=0, sticky='e')
+    sps_chpilot = ttk.Entry(mainframe, width=12)
+    sps_chpilot.insert(0, '128')
+    sps_chpilot.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='sync_len_bits:').grid(row=r, column=2, sticky='e')
+    sps_synclen = ttk.Entry(mainframe, width=12)
+    sps_synclen.insert(0, '26')
+    sps_synclen.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='n_trials:').grid(row=r, column=4, sticky='e')
+    sps_ntr = ttk.Entry(mainframe, width=8)
+    sps_ntr.insert(0, '80')
+    sps_ntr.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    # ------------------ plot_ser_vs_sync_len parameters ------------------
+    run_sync_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Plot SER vs sync length', variable=run_sync_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    sync_fs = ttk.Entry(mainframe, width=14)
+    sync_fs.insert(0, str(int(1e6)))
+    sync_fs.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
+    sync_M = ttk.Entry(mainframe, width=8)
+    sync_M.insert(0, '16')
+    sync_M.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='Nbits:').grid(row=r, column=4, sticky='e')
+    sync_Nbits = ttk.Entry(mainframe, width=12)
+    sync_Nbits.insert(0, '4000')
+    sync_Nbits.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='sync_len_list (comma sep):').grid(row=r, column=0, sticky='e')
+    sync_entry = ttk.Entry(mainframe, width=36)
+    sync_entry.insert(0, '8,13,26,52')
+    sync_entry.grid(row=r, column=1, columnspan=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='sps:').grid(row=r, column=0, sticky='e')
+    sync_sps = ttk.Entry(mainframe, width=8)
+    sync_sps.insert(0, '8')
+    sync_sps.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=2, sticky='e')
+    sync_chpilot = ttk.Entry(mainframe, width=12)
+    sync_chpilot.insert(0, '128')
+    sync_chpilot.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='n_trials:').grid(row=r, column=4, sticky='e')
+    sync_ntr = ttk.Entry(mainframe, width=8)
+    sync_ntr.insert(0, '80')
+    sync_ntr.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    # ------------------ plot_ser_vs_M parameters ------------------
+    run_M_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Plot SER vs modulation order M', variable=run_M_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    M_fs = ttk.Entry(mainframe, width=14)
+    M_fs.insert(0, str(int(1e6)))
+    M_fs.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='M list (comma sep):').grid(row=r, column=2, sticky='e')
+    M_entry = ttk.Entry(mainframe, width=18)
+    M_entry.insert(0, '2,4,8,16,32')
+    M_entry.grid(row=r, column=3, columnspan=3, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='Nbits:').grid(row=r, column=0, sticky='e')
+    M_Nbits = ttk.Entry(mainframe, width=12)
+    M_Nbits.insert(0, '1000')
+    M_Nbits.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='sps:').grid(row=r, column=2, sticky='e')
+    M_sps = ttk.Entry(mainframe, width=8)
+    M_sps.insert(0, '8')
+    M_sps.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=4, sticky='e')
+    M_chpilot = ttk.Entry(mainframe, width=8)
+    M_chpilot.insert(0, '128')
+    M_chpilot.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='sync_len_bits:').grid(row=r, column=0, sticky='e')
+    M_synclen = ttk.Entry(mainframe, width=12)
+    M_synclen.insert(0, '26')
+    M_synclen.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='n_trials:').grid(row=r, column=2, sticky='e')
+    M_ntr = ttk.Entry(mainframe, width=8)
+    M_ntr.insert(0, '80')
+    M_ntr.grid(row=r, column=3, sticky='w')
+    r += 1
+
+    # ------------------ plot_ser_vs_N parameters ------------------
+    run_N_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Plot SER vs number of data symbols N', variable=run_N_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    N_fs = ttk.Entry(mainframe, width=14)
+    N_fs.insert(0, str(int(1e6)))
+    N_fs.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
+    N_M = ttk.Entry(mainframe, width=8)
+    N_M.insert(0, '16')
+    N_M.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='sps:').grid(row=r, column=4, sticky='e')
+    N_sps = ttk.Entry(mainframe, width=8)
+    N_sps.insert(0, '8')
+    N_sps.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='N list (comma sep):').grid(row=r, column=0, sticky='e')
+    N_entry = ttk.Entry(mainframe, width=36)
+    N_entry.insert(0, '500,1000,2000,4000')
+    N_entry.grid(row=r, column=1, columnspan=5, sticky='w')
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r+1, column=0, sticky='e')
+    N_chpilot = ttk.Entry(mainframe, width=12)
+    N_chpilot.insert(0, '128')
+    N_chpilot.grid(row=r+1, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='sync_len_bits:').grid(row=r+1, column=2, sticky='e')
+    N_synclen = ttk.Entry(mainframe, width=12)
+    N_synclen.insert(0, '26')
+    N_synclen.grid(row=r+1, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='n_trials:').grid(row=r+1, column=4, sticky='e')
+    N_ntr = ttk.Entry(mainframe, width=8)
+    N_ntr.insert(0, '80')
+    N_ntr.grid(row=r+1, column=5, sticky='w')
+    r += 2
+
+    # ------------------ find_best_params_for_M parameters ------------------
+    run_search_var = tk.IntVar(value=0)
+    ttk.Checkbutton(mainframe, text='Run coarse search (find_best_params_for_M)', variable=run_search_var).grid(row=r, column=0, sticky='w', columnspan=2)
+    r += 1
+
+    ttk.Label(mainframe, text='M list (comma sep):').grid(row=r, column=0, sticky='e')
+    search_M_entry = ttk.Entry(mainframe, width=18)
+    search_M_entry.insert(0, '4,16')
+    search_M_entry.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='sps candidates:').grid(row=r, column=2, sticky='e')
+    search_sps_entry = ttk.Entry(mainframe, width=18)
+    search_sps_entry.insert(0, '2,4,8')
+    search_sps_entry.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='N candidates:').grid(row=r, column=4, sticky='e')
+    search_N_entry = ttk.Entry(mainframe, width=18)
+    search_N_entry.insert(0, '1000,2000')
+    search_N_entry.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='fs candidates (Hz, comma sep):').grid(row=r, column=0, sticky='e')
+    search_fs_entry = ttk.Entry(mainframe, width=28)
+    search_fs_entry.insert(0, '1000000,2000000')
+    search_fs_entry.grid(row=r, column=1, columnspan=3, sticky='w')
+
+    ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=4, sticky='e')
+    search_chpilot = ttk.Entry(mainframe, width=10)
+    search_chpilot.insert(0, '128')
+    search_chpilot.grid(row=r, column=5, sticky='w')
+    r += 1
+
+    ttk.Label(mainframe, text='sync_len_bits:').grid(row=r, column=0, sticky='e')
+    search_synclen = ttk.Entry(mainframe, width=10)
+    search_synclen.insert(0, '26')
+    search_synclen.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='n_trials:').grid(row=r, column=2, sticky='e')
+    search_ntr = ttk.Entry(mainframe, width=8)
+    search_ntr.insert(0, '60')
+    search_ntr.grid(row=r, column=3, sticky='w')
+
+    ttk.Label(mainframe, text='top_k:').grid(row=r, column=4, sticky='e')
+    search_topk = ttk.Entry(mainframe, width=8)
+    search_topk.insert(0, '5')
+    search_topk.grid(row=r, column=5, sticky='w')
+    r += 1
+
+        # Run button
+    def run_selected():
+        # Run selected tasks in a separate thread to avoid freezing UI
+        def worker():
+            try:
+                any_run = False
+                # --- single frame demo args ---
+                if run_demo_var.get():
+                    any_run = True
+                    Nbits_val = int(demo_Nbits.get())
+                    M_val = int(demo_M.get())
+                    sps_val = int(demo_sps.get())
+                    fs_val = float(demo_fs.get())
+                    sync_val = parse_sync_barker(demo_sync.get())
+                    chpilot_val = int(demo_chpilot.get())
+                    seed_str = demo_seed.get().strip()
+                    seed_val = None if seed_str.lower() in ('none', '') else int(seed_str)
+                    pluto_ip_val = demo_pluto_ip.get().strip() or PLUTO_IP
+                    print(f'Running single-frame demo with Nbits={Nbits_val}, M={M_val}, sps={sps_val}, fs={fs_val}, sync_barker={sync_val}, chpilot={chpilot_val}, seed={seed_val}, pluto_ip={pluto_ip_val}')
+                    run_single_frame_demo(Nbits=Nbits_val, M=M_val, sps=sps_val, fs=fs_val, sync_barker13=sync_val, ch_pilot_len_bits=chpilot_val, seed=seed_val, pluto_ip=pluto_ip_val)
+
+                # --- plot SER vs sps args ---
+                if run_sps_var.get():
+                    any_run = True
+                    fs_val = float(sps_fs.get())
+                    M_val = int(sps_M.get())
+                    Nbits_val = int(sps_Nbits.get())
+                    sps_list_val = parse_list(sps_entry.get(), int)
+                    chpilot_val = int(sps_chpilot.get())
+                    sync_len_val = int(sps_synclen.get())
+                    n_trials = int(sps_ntr.get())
+                    print(f'Running plot_ser_vs_sps with fs={fs_val}, M={M_val}, Nbits={Nbits_val}, sps_list={sps_list_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
+                    plot_ser_vs_sps(fs=fs_val, M=M_val, Nbits=Nbits_val, sps_list=sps_list_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+
+                # --- plot SER vs sync length args ---
+                if run_sync_var.get():
+                    any_run = True
+                    fs_val = float(sync_fs.get())
+                    M_val = int(sync_M.get())
+                    Nbits_val = int(sync_Nbits.get())
+                    sync_list_val = parse_list(sync_entry.get(), int)
+                    sps_val = int(sync_sps.get())
+                    chpilot_val = int(sync_chpilot.get())
+                    n_trials = int(sync_ntr.get())
+                    print(f'Running plot_ser_vs_sync_len with fs={fs_val}, M={M_val}, Nbits={Nbits_val}, sync_len_list={sync_list_val}, sps={sps_val}, ch_pilot_len_bits={chpilot_val}, n_trials={n_trials}')
+                    plot_ser_vs_sync_len(fs=fs_val, M=M_val, Nbits=Nbits_val, sync_len_list=sync_list_val, sps=sps_val, ch_pilot_len_bits=chpilot_val, n_trials=n_trials)
+
+                # --- plot SER vs M args ---
+                if run_M_var.get():
+                    any_run = True
+                    fs_val = float(M_fs.get())
+                    M_list_val = parse_list(M_entry.get(), int)
+                    Nbits_val = int(M_Nbits.get())
+                    sps_val = int(M_sps.get())
+                    chpilot_val = int(M_chpilot.get())
+                    sync_len_val = int(M_synclen.get())
+                    n_trials = int(M_ntr.get())
+                    print(f'Running plot_ser_vs_M with fs={fs_val}, M_list={M_list_val}, Nbits={Nbits_val}, sps={sps_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
+                    plot_ser_vs_M(fs=fs_val, M_list=M_list_val, Nbits=Nbits_val, sps=sps_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+
+                # --- plot SER vs N args ---
+                if run_N_var.get():
+                    any_run = True
+                    fs_val = float(N_fs.get())
+                    M_val = int(N_M.get())
+                    sps_val = int(N_sps.get())
+                    N_list_val = parse_list(N_entry.get(), int)
+                    chpilot_val = int(N_chpilot.get())
+                    sync_len_val = int(N_synclen.get())
+                    n_trials = int(N_ntr.get())
+                    print(f'Running plot_ser_vs_N with fs={fs_val}, M={M_val}, sps={sps_val}, N_list={N_list_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
+                    plot_ser_vs_N(fs=fs_val, M=M_val, sps=sps_val, N_list=N_list_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+
+                # --- find_best_params_for_M args ---
+                if run_search_var.get():
+                    any_run = True
+                    M_list_search = parse_list(search_M_entry.get(), int)
+                    sps_cand = parse_list(search_sps_entry.get(), int)
+                    N_cand = parse_list(search_N_entry.get(), int)
+                    fs_cand = parse_list_float(search_fs_entry.get())
+                    chpilot_val = int(search_chpilot.get())
+                    sync_len_val = int(search_synclen.get())
+                    n_trials = int(search_ntr.get())
+                    top_k = int(search_topk.get())
+                    print(f'Running find_best_params_for_M with M_list={M_list_search}, sps_candidates={sps_cand}, N_candidates={N_cand}, fs_candidates={fs_cand}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}, top_k={top_k}')
+                    results = find_best_params_for_M(M_list=M_list_search, sps_candidates=sps_cand, N_candidates=N_cand, fs_candidates=fs_cand, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials, top_k=top_k)
+                    print('Best combos (per M):')
+                    for Mkey, combos in results.items():
+                        print(f'M={Mkey}')
+                        for ser, sps_v, N_v, fs_v, Rs_v in combos:
+                            print(f'  SER={ser:.4e} sps={sps_v} N={N_v} fs={fs_v:.2e} Rs={Rs_v:.2f}')
+
+                if not any_run:
+                    messagebox.showinfo('No selection', 'No routines selected — nothing to run.')
+                else:
+                    print('All selected tasks finished. Showing plots (if any).')
+                    try:
+                        plt.show()
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                messagebox.showerror('Error', f'An error occurred: {e}')
+                raise
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    run_btn = ttk.Button(mainframe, text='Run selected simulations', command=run_selected)
+    run_btn.grid(row=r, column=0, columnspan=3, pady=(12, 0), sticky='w')
+
+    quit_btn = ttk.Button(mainframe, text='Quit', command=root.destroy)
+    quit_btn.grid(row=r, column=3, columnspan=3, pady=(12, 0), sticky='e')
+
+    root.mainloop()
