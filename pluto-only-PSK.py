@@ -372,40 +372,33 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     errs_after_aw, ser_after_aw = biterr(data_bits, rx_syms_after_aw)
     print(f"INFO: [DEM_AFTER_AW] NumErr={errs_after_aw}, SER={ser_after_aw:.6g}")
 
-    # -------------------------- Plotting (unchanged but labelled 'received')
-    plt.figure('No AWGN: Before/After Equalization', figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(np.real(symbol_samples_no[:2000]), np.imag(symbol_samples_no[:2000]), '.', markersize=6)
-    plt.title('No AWGN — before equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
+    # -------------------------- Plotting --------------------------
+    
+    # PLOT MODIFIED: Combined Before and After Equalization in one figure
+    plt.figure('Received Constellation: Before vs After Equalization', figsize=(12, 6))
 
-    plt.subplot(1, 2, 2)
-    plt.plot(np.real(symbol_samples_eq_no[:2000]), np.imag(symbol_samples_eq_no[:2000]), '.', markersize=6)
-    plt.title('No AWGN — after equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.figure('Received: Before/After Equalization', figsize=(10, 5))
+    # Subplot 1: Before Equalization
     plt.subplot(1, 2, 1)
     plt.plot(np.real(symbol_samples_aw[:2000]), np.imag(symbol_samples_aw[:2000]), '.')
-    plt.title('Received buffer — before equalization (subset)')
+    plt.title('Before Equalization (subset)')
     plt.xlabel('I')
     plt.ylabel('Q')
     plt.axis('equal')
     plt.grid(True)
 
+    # Subplot 2: After Equalization
     plt.subplot(1, 2, 2)
-    plt.plot(np.real(symbol_samples_eq_aw[:2000]), np.imag(symbol_samples_eq_aw[:2000]), '.')
-    plt.title('Received buffer — after equalization (subset)')
+    plt.plot(np.real(symbol_samples_eq_aw), np.imag(symbol_samples_eq_aw), '.')
+    plt.title('After Equalization (subset)')
     plt.xlabel('I')
     plt.ylabel('Q')
-    plt.axis('equal')
     plt.grid(True)
+    plt.axis('equal')
+    
+    # Add a main title for the whole figure
+    plt.suptitle('Received Signal Constellation')
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make room for suptitle
+
 
     plt.figure('Correlation peaks', figsize=(8, 5))
     plt.subplot(2, 1, 1)
@@ -419,13 +412,6 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     plt.ylabel('mag')
     plt.grid(True)
 
-    plt.figure('Zoom After Equalization (received buffer)', figsize=(6, 6))
-    plt.plot(np.real(symbol_samples_eq_aw), np.imag(symbol_samples_eq_aw), '.')
-    plt.title('After equalization (received buffer) - zoom subset')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.grid(True)
-    plt.axis('equal')
 
     print(f"INFO: [SUMMARY] NO_AWGN: BER_before={ser_before_no:.6g} BER_after={ser_after_no:.6g} | RECEIVED: BER_before={ser_before_aw:.6g} BER_after={ser_after_aw:.6g}")
 
@@ -562,7 +548,7 @@ def plot_ser_vs_sps(fs, M, Nsymbols, sps_list, ch_pilot_len_bits=128,
     plt.ylabel('SER (log scale)')
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    #plt.show()
     return sps_arr, Rs_arr, np.array(sers)
 
 
@@ -583,7 +569,7 @@ def plot_ser_vs_sync_len(fs, M, Nsymbols, sync_len_list, sps=8,
     plt.xlabel('sync / pilot length (symbols)')
     plt.ylabel('SER (log scale)')
     plt.grid(True)
-    plt.show()
+    #plt.show()
     return np.array(sync_len_list), np.array(sers)
 
 
@@ -604,7 +590,7 @@ def plot_ser_vs_M(fs, M_list, Nsymbols, sps=8, ch_pilot_len_bits=128,
     plt.xlabel('M (PSK order)')
     plt.ylabel('SER (log scale)')
     plt.grid(True)
-    plt.show()
+   # plt.show()
     return np.array(M_list), np.array(sers)
 
 
@@ -625,7 +611,7 @@ def plot_ser_vs_N(fs, M, sps, N_list, ch_pilot_len_bits=128, sync_len_bits=26,
     plt.xlabel('Number of data symbols (N)')
     plt.ylabel('SER (log scale)')
     plt.grid(True)
-    plt.show()
+    #plt.show()
     return np.array(N_list), np.array(sers)
 
 
