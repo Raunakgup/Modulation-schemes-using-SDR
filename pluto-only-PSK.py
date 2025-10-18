@@ -19,6 +19,7 @@ PLUTO_CENTER_FREQ = 915e6    # RF center frequency in Hz
 # GUI-controlled defaults (updated by popup)
 GUI_TX_GAIN = -40.0  # dB
 GUI_RX_GAIN = 0.0    # dB
+GUI_RX_GAIN_MODE = 'manual'  # 'manual' | 'slow_attack' | 'fast_attack' (controls Pluto AGC mode)
 GUI_CENTER_FREQ = PLUTO_CENTER_FREQ  # Hz (popup uses MHz)
 
 # We import the Pluto driver (pyadi-iio) only when running the script
@@ -215,7 +216,7 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
 
     # Conservative default gains (adjust to your setup)
     pluto.set_tx_gain(GUI_TX_GAIN)
-    pluto.set_rx_gain(GUI_RX_GAIN)
+    pluto.set_rx_gain(GUI_RX_GAIN, mode=GUI_RX_GAIN_MODE)
 
     # Scale to Pluto amplitude convention and start cyclic TX
     tx_samples = (tx_frame * (2**14)).astype(np.complex64)
@@ -417,7 +418,7 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
 
     return {
         'ser_noawgn_before': ser_before_no,
-        'ser_noawgn_after': ser_after_no,
+        'ser_noawgn_after': ser_before_no,
         'ser_awgn_before': ser_before_aw,
         'ser_awgn_after': ser_after_aw,
         'symbol_samples_eq_aw': symbol_samples_eq_aw,
@@ -459,7 +460,7 @@ def simulate_frame_ser(M=16, sps=8, fs=1e6, Nsymbols=4000,
     # Transmit and receive using Pluto
     pluto = PlutoSDRWrapper(ip=pluto_ip, sample_rate=fs, center_freq=GUI_CENTER_FREQ, rx_buffer_size=frame_samples)
     pluto.set_tx_gain(GUI_TX_GAIN)
-    pluto.set_rx_gain(GUI_RX_GAIN)
+    pluto.set_rx_gain(GUI_RX_GAIN, mode=GUI_RX_GAIN_MODE)
 
     tx_samples = (tx_frame * (2**14)).astype(np.complex64)
     pluto.tx_waveform(tx_samples, cyclic=True)
@@ -735,16 +736,36 @@ if __name__ == "__main__":
     global_tx_gain_entry.insert(0, str(int(GUI_TX_GAIN)))
     global_tx_gain_entry.grid(row=r, column=1, sticky='w')
 
-    ttk.Label(mainframe, text='rx_gain (dB):').grid(row=r, column=2, sticky='e')
-    global_rx_gain_entry = ttk.Entry(mainframe, width=8)
-    global_rx_gain_entry.insert(0, str(int(GUI_RX_GAIN)))
-    global_rx_gain_entry.grid(row=r, column=3, sticky='w')
+    ttk.Label(mainframe, text='rx gain mode:').grid(row=r, column=2, sticky='e')
+rx_gain_mode_var = tk.StringVar(value='Manual')
+global_rx_gain_mode_cb = ttk.Combobox(mainframe, textvariable=rx_gain_mode_var, values=('Manual','AGC Slow Attack','AGC Fast Attack'), state='readonly', width=18)
+global_rx_gain_mode_cb.grid(row=r, column=3, sticky='w')
+# Manual rx gain entry (appears / is enabled only when mode == 'Manual')
+ttk.Label(mainframe, text='manual rx_gain (dB):').grid(row=r+1, column=2, sticky='e')
+global_rx_gain_entry = ttk.Entry(mainframe, width=8)
+global_rx_gain_entry.insert(0, str(int(GUI_RX_GAIN)))
+global_rx_gain_entry.grid(row=r+1, column=3, sticky='w')
+
+def on_rx_gain_mode_change(*args):
+    mode = rx_gain_mode_var.get()
+    if mode == 'Manual':
+        global_rx_gain_entry.config(state='normal')
+    else:
+        # disable manual entry when AGC selected (value retained)
+        global_rx_gain_entry.config(state='disabled')
+
+# Trace changes to the combobox variable to toggle manual entry
+try:
+    rx_gain_mode_var.trace_add('write', on_rx_gain_mode_change)
+except AttributeError:
+    # Older Tkinter versions have trace method
+    rx_gain_mode_var.trace('w', on_rx_gain_mode_change)
 
     ttk.Label(mainframe, text='Pluto center freq (MHz):').grid(row=r, column=4, sticky='e')
     global_cf_entry = ttk.Entry(mainframe, width=12)
     global_cf_entry.insert(0, str(int(GUI_CENTER_FREQ/1e6)))
     global_cf_entry.grid(row=r, column=5, sticky='w')
-    r += 1
+    r += 2
 
     # ------------------ run_single_frame_demo parameters ------------------
     run_demo_var = tk.IntVar(value=0)
@@ -1071,11 +1092,25 @@ if __name__ == "__main__":
                 any_run = False
                 # Read global Pluto parameters from GUI (MHz -> Hz for center freq)
                 tx_gain_val = float(global_tx_gain_entry.get())
-                rx_gain_val = float(global_rx_gain_entry.get())
+                # Read rx gain mode and manual value (if applicable)
+                rx_mode_sel = rx_gain_mode_var.get()
+                if rx_mode_sel == 'Manual':
+                    rx_gain_val = float(global_rx_gain_entry.get())
+                    rx_mode = 'manual'
+                elif rx_mode_sel == 'AGC Slow Attack':
+                    # AGC slow attack mode on Pluto
+                    rx_gain_val = float(global_rx_gain_entry.get()) if global_rx_gain_entry.get().strip() != '' else GUI_RX_GAIN
+                    rx_mode = 'slow_attack'
+                else:
+                    # AGC Fast Attack
+                    rx_gain_val = float(global_rx_gain_entry.get()) if global_rx_gain_entry.get().strip() != '' else GUI_RX_GAIN
+                    rx_mode = 'fast_attack'
+
                 cf_val = float(global_cf_entry.get()) * 1e6
                 # Set module-level globals used by Pluto routines
                 globals()['GUI_TX_GAIN'] = tx_gain_val
                 globals()['GUI_RX_GAIN'] = rx_gain_val
+                globals()['GUI_RX_GAIN_MODE'] = rx_mode
                 globals()['GUI_CENTER_FREQ'] = cf_val
                 
                 # --- single frame demo args ---
