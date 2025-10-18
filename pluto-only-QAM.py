@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import ceil, sqrt
 import time
+import queue
+import sys
 import adi
 
 # Pluto-only QAM version of the robust channel estimation demo
@@ -14,6 +16,13 @@ import adi
 # --------------------------- User-configurable globals ----------------------
 PLUTO_IP = "ip:192.168.2.1"  # Pluto device URI (change as needed)
 PLUTO_CENTER_FREQ = 915e6    # RF center frequency in Hz
+
+# GUI-controlled defaults (updated by popup)
+GUI_TX_GAIN = -40.0  # dB
+GUI_RX_GAIN = 0.0    # dB
+GUI_RX_GAIN_MODE = 'manual' # 'manual', 'slow_attack', or 'fast_attack'
+GUI_CENTER_FREQ = PLUTO_CENTER_FREQ  # Hz (popup uses MHz)
+
 
 # Optional fixed RNG seed for reproducibility during debugging; remove to
 # allow different frames each run.
@@ -110,7 +119,8 @@ class PlutoSDRWrapper:
 
     def set_rx_gain(self, db, mode='manual'):
         self.sdr.gain_control_mode_chan0 = mode
-        self.sdr.rx_hardwaregain_chan0 = float(db)
+        if mode == 'manual':
+            self.sdr.rx_hardwaregain_chan0 = float(db)
 
     def tx_waveform(self, samples, cyclic=True):
         self.sdr.tx_cyclic_buffer = bool(cyclic)
@@ -181,9 +191,9 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
 
     # Pluto TX/RX
     print("INFO: [PLUTO] Initializing PlutoSDR and transmitting frame...")
-    pluto = PlutoSDRWrapper(ip=pluto_ip, sample_rate=fs, center_freq=PLUTO_CENTER_FREQ, rx_buffer_size=frame_samples)
-    pluto.set_tx_gain(-40)
-    pluto.set_rx_gain(0.0)
+    pluto = PlutoSDRWrapper(ip=pluto_ip, sample_rate=fs, center_freq=GUI_CENTER_FREQ, rx_buffer_size=frame_samples)
+    pluto.set_tx_gain(GUI_TX_GAIN)
+    pluto.set_rx_gain(GUI_RX_GAIN, mode=GUI_RX_GAIN_MODE)
 
     tx_samples = (tx_frame * (2**14)).astype(np.complex64)
     pluto.tx_waveform(tx_samples, cyclic=True)
@@ -204,18 +214,12 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     pilot_start_no = pilot_start_in_rx2_no % frame_samples
     print(f"INFO: [SYNC_NO] peak_no={peak_no}, pilot_start_no={pilot_start_no+1}, pilot_start mod sps={(pilot_start_no % sps)+1}")
 
-    seglen_no = min(len(sync_shaped), frame_samples - pilot_start_no)
-    seg_no = rx_no_noise[pilot_start_no: (pilot_start_no + seglen_no)]
-    match_frac_no = np.sum(np.abs(seg_no - sync_shaped[:seglen_no]) < 1e-6) / seglen_no
-    print(f"INFO: [SYNC_MATCH_NO] seglen={seglen_no}, match_frac={match_frac_no:.4f}")
-
     # Channel pilot extraction
     chpilot_start_no = pilot_start_no + len(sync_shaped)
     chpilot_indices_no = (np.arange(chpilot_start_no, chpilot_start_no + ch_pilot_len_bits*sps) % frame_samples).astype(int)
     chpilot_samples_no = rx_no_noise[chpilot_indices_no]
     chpilot_mat_no = chpilot_samples_no.reshape((sps, ch_pilot_len_bits), order='F')
     rx_chpilot_symbols_no = np.sum(chpilot_mat_no, axis=0).astype(np.complex128)
-    print_snip('rx_chpilot_symbols_no (first)', rx_chpilot_symbols_no[:min(12, rx_chpilot_symbols_no.size)])
 
     h_est_no = np.mean(rx_chpilot_symbols_no / chpilot_symbols)
     print(f"INFO: [H_EST_NO] h_est_no={h_est_no.real:.4f}{h_est_no.imag:+.4f}j")
@@ -226,14 +230,12 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     data_samples_no = rx_no_noise[data_indices_no]
     data_mat_no = data_samples_no.reshape((sps, Nsymbols), order='F')
     symbol_samples_no = np.sum(data_mat_no, axis=0).astype(np.complex128)
-    print_snip('symbol_samples_no (first)', symbol_samples_no[:min(12, symbol_samples_no.size)])
 
     rx_syms_before_no = qamdemod(symbol_samples_no, M)
     errs_before_no, ser_before_no = biterr(data_bits, rx_syms_before_no)
     print(f"INFO: [DEM_BEFORE_NO] NumErr={errs_before_no}, SER={ser_before_no:.6g}")
 
     symbol_samples_eq_no = symbol_samples_no / h_est_no
-    print_snip('symbol_samples_eq_no (first)', symbol_samples_eq_no[:min(12, symbol_samples_eq_no.size)])
 
     rx_syms_after_no = qamdemod(symbol_samples_eq_no, M)
     errs_after_no, ser_after_no = biterr(data_bits, rx_syms_after_no)
@@ -245,67 +247,22 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     peak_aw = np.argmax(corr_aw)
     pilot_start_in_rx2_aw = peak_aw - (len(sync_shaped) - 1)
     pilot_start_aw = pilot_start_in_rx2_aw % frame_samples
-    print(f"INFO: [SYNC_AW] peak_aw={peak_aw}, pilot_start_aw={pilot_start_aw+1}, pilot_start mod sps={(pilot_start_aw % sps)+1}")
-
-    seglen_aw = min(len(sync_shaped), frame_samples - pilot_start_aw)
-    seg_aw = rx_received[pilot_start_aw: (pilot_start_aw + seglen_aw)]
-    match_frac_aw = np.sum(np.abs(seg_aw - sync_shaped[:seglen_aw]) < 1e-6) / seglen_aw
-    print(f"INFO: [SYNC_MATCH_AW] seglen={seglen_aw}, match_frac={match_frac_aw:.4f}")
 
     chpilot_start_aw = pilot_start_aw + len(sync_shaped)
     chpilot_indices_aw = (np.arange(chpilot_start_aw, chpilot_start_aw + ch_pilot_len_bits*sps) % frame_samples).astype(int)
     chpilot_samples_aw = rx_received[chpilot_indices_aw]
     chpilot_mat_aw = chpilot_samples_aw.reshape((sps, ch_pilot_len_bits), order='F')
     rx_chpilot_symbols_aw = np.sum(chpilot_mat_aw, axis=0).astype(np.complex128)
-    print_snip('rx_chpilot_symbols_aw (first)', rx_chpilot_symbols_aw[:min(12, rx_chpilot_symbols_aw.size)])
 
     h_est_aw = np.mean(rx_chpilot_symbols_aw / chpilot_symbols)
-    print(f"INFO: [H_EST_AW] h_est_aw={h_est_aw.real:.4f}{h_est_aw.imag:+.4f}j")
 
     data_start_aw = chpilot_start_aw + ch_pilot_len_bits * sps
     data_indices_aw = (np.arange(data_start_aw, data_start_aw + Nsymbols*sps) % frame_samples).astype(int)
     data_samples_aw = rx_received[data_indices_aw]
     data_mat_aw = data_samples_aw.reshape((sps, Nsymbols), order='F')
     symbol_samples_aw = np.sum(data_mat_aw, axis=0).astype(np.complex128)
-    print_snip('symbol_samples_aw (first)', symbol_samples_aw[:min(12, symbol_samples_aw.size)])
 
     symbol_samples_eq_aw = symbol_samples_aw / h_est_aw
-    print_snip('symbol_samples_eq_aw (first)', symbol_samples_eq_aw[:min(12, symbol_samples_eq_aw.size)])
-
-    # ----------------------- Debug: Tx vs Rx (first 20 symbols) -----------------------
-    n_plot = 20  # number of symbols to compare
-    n_plot = min(n_plot, data_symbols.size, symbol_samples_eq_aw.size)
-    tx_plot = data_symbols[:n_plot]
-    rx_plot = symbol_samples_eq_aw[:n_plot]
-    plt.figure('Tx vs Rx Constellation (first symbols)', figsize=(6, 6))
-    plt.plot(np.real(tx_plot), np.imag(tx_plot), 'x', markersize=8, label='Transmitted (first {})'.format(n_plot))
-    plt.plot(np.real(rx_plot), np.imag(rx_plot), 'o', markersize=6, label='Received EQ (first {})'.format(n_plot))
-    for i in range(n_plot):
-        t = tx_plot[i]
-        r = rx_plot[i]
-        plt.plot([np.real(t), np.real(r)], [np.imag(t), np.imag(r)], '-', linewidth=0.7, alpha=0.6)
-    plt.title('Transmitted (x) vs Received after EQ (o) — first {} symbols'.format(n_plot))
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-    plt.legend(loc='best')
-    inds = np.arange(n_plot)
-    plt.figure('Tx vs Rx time series (first symbols)', figsize=(10, 5))
-    plt.subplot(2, 1, 1)
-    plt.plot(inds, np.real(tx_plot), 'x-', label='Tx real')
-    plt.plot(inds, np.real(rx_plot), 'o-', label='Rx eq real')
-    plt.ylabel('Real')
-    plt.grid(True)
-    plt.legend(loc='best')
-    plt.subplot(2, 1, 2)
-    plt.plot(inds, np.imag(tx_plot), 'x-', label='Tx imag')
-    plt.plot(inds, np.imag(rx_plot), 'o-', label='Rx eq imag')
-    plt.xlabel('Symbol index (0 = first data symbol)')
-    plt.ylabel('Imag')
-    plt.grid(True)
-    plt.legend(loc='best')
-    plt.tight_layout()
 
     rx_syms_before_aw = qamdemod(symbol_samples_aw, M)
     errs_before_aw, ser_before_aw = biterr(data_bits, rx_syms_before_aw)
@@ -314,74 +271,74 @@ def run_single_frame_demo(Nsymbols=4000, M=16, sps=8, fs=1e6,
     rx_syms_after_aw = qamdemod(symbol_samples_eq_aw, M)
     errs_after_aw, ser_after_aw = biterr(data_bits, rx_syms_after_aw)
     print(f"INFO: [DEM_AFTER_AW] NumErr={errs_after_aw}, SER={ser_after_aw:.6g}")
+    print(f"\nINFO: [SUMMARY] NO_RECEIVED: BER_before={ser_before_no:.6g} BER_after={ser_after_no:.6g} | RECEIVED: BER_before={ser_before_aw:.6g} BER_after={ser_after_aw:.6g}")
 
-    plt.figure('No received: Before/After Equalization', figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(np.real(symbol_samples_no[:2000]), np.imag(symbol_samples_no[:2000]), '.', markersize=6)
-    plt.title('No received — before equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.subplot(1, 2, 2)
-    plt.plot(np.real(symbol_samples_eq_no[:2000]), np.imag(symbol_samples_eq_no[:2000]), '.', markersize=6)
-    plt.title('No received — after equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.figure('Received: Before/After Equalization', figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(np.real(symbol_samples_aw[:2000]), np.imag(symbol_samples_aw[:2000]), '.')
-    plt.title('Received buffer — before equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.subplot(1, 2, 2)
-    plt.plot(np.real(symbol_samples_eq_aw[:2000]), np.imag(symbol_samples_eq_aw[:2000]), '.')
-    plt.title('Received buffer — after equalization (subset)')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.figure('Correlation peaks', figsize=(8, 5))
-    plt.subplot(2, 1, 1)
-    plt.plot(corr_no)
-    plt.title('Correlation magnitude (no received)')
-    plt.ylabel('mag')
-    plt.grid(True)
-    plt.subplot(2, 1, 2)
-    plt.plot(corr_aw)
-    plt.title('Correlation magnitude (received buffer)')
-    plt.ylabel('mag')
-    plt.grid(True)
-
-    plt.figure('Zoom After Equalization (received buffer)', figsize=(6, 6))
-    plt.plot(np.real(symbol_samples_eq_aw), np.imag(symbol_samples_eq_aw), '.')
-    plt.title('After equalization (received buffer) - zoom subset')
-    plt.xlabel('I')
-    plt.ylabel('Q')
-    plt.grid(True)
-    plt.axis('equal')
-
-    print(f"\nINFO: [SUMMARY] NO_received: BER_before={ser_before_no:.6g} BER_after={ser_after_no:.6g} | RECEIVED: BER_before={ser_before_aw:.6g} BER_after={ser_after_aw:.6g}")
+    # Prepare data for plotting
+    n_plot = min(20, data_symbols.size, symbol_samples_eq_aw.size)
+    tx_plot = data_symbols[:n_plot]
+    rx_plot = symbol_samples_eq_aw[:n_plot]
 
     return {
-        'ser_noreceived_before': ser_before_no,
-        'ser_noreceived_after': ser_after_no,
-        'ser_received_before': ser_before_aw,
-        'ser_received_after': ser_after_aw,
+        'symbol_samples_aw': symbol_samples_aw,
         'symbol_samples_eq_aw': symbol_samples_eq_aw,
-        'symbol_samples_eq_no': symbol_samples_eq_no,
         'corr_no': corr_no,
         'corr_aw': corr_aw,
+        'tx_plot': tx_plot,
+        'rx_plot': rx_plot,
     }
 
+def plot_single_frame_results(data):
+    """Takes the results from run_single_frame_demo and plots them."""
+    # Unpack data
+    symbol_samples_aw = data['symbol_samples_aw']
+    symbol_samples_eq_aw = data['symbol_samples_eq_aw']
+    corr_no = data['corr_no']
+    corr_aw = data['corr_aw']
+    tx_plot = data['tx_plot']
+    rx_plot = data['rx_plot']
+    n_plot = len(tx_plot)
+
+    # Plot 1: Before vs After Equalization
+    plt.figure('Received Constellation: Before vs After Equalization', figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(np.real(symbol_samples_aw[:2000]), np.imag(symbol_samples_aw[:2000]), '.')
+    plt.title('Before Equalization (subset)')
+    plt.xlabel('I'); plt.ylabel('Q'); plt.axis('equal'); plt.grid(True)
+    plt.subplot(1, 2, 2)
+    plt.plot(np.real(symbol_samples_eq_aw), np.imag(symbol_samples_eq_aw), '.')
+    plt.title('After Equalization (subset)')
+    plt.xlabel('I'); plt.ylabel('Q'); plt.axis('equal'); plt.grid(True)
+    plt.suptitle('Received Signal Constellation')
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    # Plot 2: Correlation Peaks
+    plt.figure('Correlation peaks', figsize=(8, 5))
+    plt.subplot(2, 1, 1)
+    plt.plot(corr_no); plt.title('Correlation magnitude (no received)'); plt.ylabel('mag'); plt.grid(True)
+    plt.subplot(2, 1, 2)
+    plt.plot(corr_aw); plt.title('Correlation magnitude (received buffer)'); plt.ylabel('mag'); plt.grid(True)
+    
+    # Plot 3: Tx vs Rx Constellation
+    plt.figure('Tx vs Rx Constellation (first symbols)', figsize=(6, 6))
+    plt.plot(np.real(tx_plot), np.imag(tx_plot), 'x', markersize=8, label=f'Transmitted (first {n_plot})')
+    plt.plot(np.real(rx_plot), np.imag(rx_plot), 'o', markersize=6, label=f'Received EQ (first {n_plot})')
+    for i in range(n_plot):
+        plt.plot([np.real(tx_plot[i]), np.real(rx_plot[i])], [np.imag(tx_plot[i]), np.imag(rx_plot[i])], '-', linewidth=0.7, alpha=0.6)
+    plt.title(f'Transmitted (x) vs Received after EQ (o) — first {n_plot} symbols')
+    plt.xlabel('I'); plt.ylabel('Q'); plt.axis('equal'); plt.grid(True); plt.legend(loc='best')
+    
+    # Plot 4: Tx vs Rx time series
+    inds = np.arange(n_plot)
+    plt.figure('Tx vs Rx time series (first symbols)', figsize=(10, 5))
+    plt.subplot(2, 1, 1)
+    plt.plot(inds, np.real(tx_plot), 'x-', label='Tx real')
+    plt.plot(inds, np.real(rx_plot), 'o-', label='Rx eq real')
+    plt.ylabel('Real'); plt.grid(True); plt.legend(loc='best')
+    plt.subplot(2, 1, 2)
+    plt.plot(inds, np.imag(tx_plot), 'x-', label='Tx imag')
+    plt.plot(inds, np.imag(rx_plot), 'o-', label='Rx eq imag')
+    plt.xlabel('Symbol index (0 = first data symbol)'); plt.ylabel('Imag'); plt.grid(True); plt.legend(loc='best')
+    plt.tight_layout()
 
 # ------------------- Monte Carlo helpers (Pluto-only) ---------------------
 def simulate_frame_ser(M=16, sps=8, fs=1e6, Nsymbols=4000,
@@ -406,9 +363,9 @@ def simulate_frame_ser(M=16, sps=8, fs=1e6, Nsymbols=4000,
     frame_bits = sync_len_bits + ch_pilot_len_bits + Nsymbols
     frame_samples = frame_bits * sps
 
-    pluto = PlutoSDRWrapper(ip=pluto_ip, sample_rate=fs, center_freq=PLUTO_CENTER_FREQ, rx_buffer_size=frame_samples)
-    pluto.set_tx_gain(-40)
-    pluto.set_rx_gain(0.0)
+    pluto = PlutoSDRWrapper(ip=pluto_ip, sample_rate=fs, center_freq=GUI_CENTER_FREQ, rx_buffer_size=frame_samples)
+    pluto.set_tx_gain(GUI_TX_GAIN)
+    pluto.set_rx_gain(GUI_RX_GAIN, mode=GUI_RX_GAIN_MODE)
 
     tx_samples = (tx_frame * (2**14)).astype(np.complex64)
     pluto.tx_waveform(tx_samples, cyclic=True)
@@ -458,95 +415,79 @@ def monte_carlo_ser(n_trials=100, seed=None, **simulate_kwargs):
     return ser, total_err, total_sym
 
 
-# ------------------------ Plot helpers (QAM) -------------------------------
-def plot_ser_vs_sps(fs, M, Nsymbols, sps_list, ch_pilot_len_bits=128,
-                    sync_len_bits=26, n_trials=80):
+# ------------------------ Simulation & Plotting (Refactored) -----------------------
+
+def run_sps_sweep(fs, M, Nsymbols, sps_list, ch_pilot_len_bits, sync_len_bits, n_trials):
+    """Runs the SER vs SPS simulation and returns data for plotting."""
     sers = []
     for sps in sps_list:
-        ser, _, _ = monte_carlo_ser(n_trials=n_trials,
-                                    M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
-                                    ch_pilot_len_bits=ch_pilot_len_bits,
-                                    sync_len_bits=sync_len_bits)
+        ser, _, _ = monte_carlo_ser(n_trials=n_trials, M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
+                                    ch_pilot_len_bits=ch_pilot_len_bits, sync_len_bits=sync_len_bits)
         print(f"INFO: sps={sps} SER={ser:.4e}")
         sers.append(ser)
     sps_arr = np.array(sps_list)
     Rs_arr = fs / sps_arr
+    return {'sps_arr': sps_arr, 'sers': np.array(sers), 'Rs_arr': Rs_arr,
+            'fs': fs, 'M': M, 'Nsymbols': Nsymbols}
+
+def plot_sps_results(data):
+    """Plots the data from the SER vs SPS simulation."""
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.semilogy(sps_arr, sers, '-o')
-    plt.title(f'SER vs sps (fs={fs}, M={M}, N={Nsymbols})')
-    plt.xlabel('samples per symbol (sps)')
-    plt.ylabel('SER (log scale)')
-    plt.grid(True)
+    plt.semilogy(data['sps_arr'], data['sers'], '-o')
+    plt.title(f"SER vs sps (fs={data['fs']}, M={data['M']}, N={data['Nsymbols']})")
+    plt.xlabel('samples per symbol (sps)'); plt.ylabel('SER (log scale)'); plt.grid(True)
     plt.subplot(1, 2, 2)
-    plt.semilogy(Rs_arr, sers, '-o')
+    plt.semilogy(data['Rs_arr'], data['sers'], '-o')
     plt.title('SER vs Symbol Rate Rs')
-    plt.xlabel('Rs = fs / sps (symbols/sec)')
-    plt.ylabel('SER (log scale)')
-    plt.grid(True)
+    plt.xlabel('Rs = fs / sps (symbols/sec)'); plt.ylabel('SER (log scale)'); plt.grid(True)
     plt.tight_layout()
-    plt.show()
-    return sps_arr, Rs_arr, np.array(sers)
 
-
-def plot_ser_vs_sync_len(fs, M, Nsymbols, sync_len_list, sps=8,
-                         ch_pilot_len_bits=128, n_trials=80):
+def run_sync_len_sweep(fs, M, Nsymbols, sync_len_list, sps, ch_pilot_len_bits, n_trials):
     sers = []
     for sync_len in sync_len_list:
-        ser, _, _ = monte_carlo_ser(n_trials=n_trials,
-                                    M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
-                                    ch_pilot_len_bits=ch_pilot_len_bits,
-                                    sync_len_bits=sync_len)
+        ser, _, _ = monte_carlo_ser(n_trials=n_trials, M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
+                                    ch_pilot_len_bits=ch_pilot_len_bits, sync_len_bits=sync_len)
         print(f"INFO: sync_len={sync_len} SER={ser:.4e}")
         sers.append(ser)
+    return {'sync_len_list': np.array(sync_len_list), 'sers': np.array(sers), 'fs': fs, 'M': M,
+            'sps': sps, 'Nsymbols': Nsymbols}
+
+def plot_sync_len_results(data):
     plt.figure(figsize=(7, 5))
-    plt.semilogy(sync_len_list, sers, '-o')
-    plt.title(f'SER vs sync length (fs={fs}, M={M}, sps={sps}, N={Nsymbols})')
-    plt.xlabel('sync / pilot length (symbols)')
-    plt.ylabel('SER (log scale)')
-    plt.grid(True)
-    plt.show()
-    return np.array(sync_len_list), np.array(sers)
+    plt.semilogy(data['sync_len_list'], data['sers'], '-o')
+    plt.title(f"SER vs sync length (fs={data['fs']}, M={data['M']}, sps={data['sps']}, N={data['Nsymbols']})")
+    plt.xlabel('sync / pilot length (symbols)'); plt.ylabel('SER (log scale)'); plt.grid(True)
 
-
-def plot_ser_vs_M(fs, M_list, Nsymbols, sps=8, ch_pilot_len_bits=128,
-                  sync_len_bits=26, n_trials=80):
+def run_M_sweep(fs, M_list, Nsymbols, sps, ch_pilot_len_bits, sync_len_bits, n_trials):
     sers = []
     for M in M_list:
-        ser, _, _ = monte_carlo_ser(n_trials=n_trials,
-                                    M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
-                                    ch_pilot_len_bits=ch_pilot_len_bits,
-                                    sync_len_bits=sync_len_bits)
+        ser, _, _ = monte_carlo_ser(n_trials=n_trials, M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
+                                    ch_pilot_len_bits=ch_pilot_len_bits, sync_len_bits=sync_len_bits)
         print(f"INFO: M={M} SER={ser:.4e}")
         sers.append(ser)
+    return {'M_list': np.array(M_list), 'sers': np.array(sers), 'fs': fs, 'Nsymbols': Nsymbols, 'sps': sps}
+
+def plot_M_results(data):
     plt.figure(figsize=(7, 5))
-    plt.semilogy(M_list, sers, '-o')
-    plt.title(f'SER vs Modulation order M (fs={fs}, N={Nsymbols}, sps={sps})')
-    plt.xlabel('M (QAM order)')
-    plt.ylabel('SER (log scale)')
-    plt.grid(True)
-    plt.show()
-    return np.array(M_list), np.array(sers)
+    plt.semilogy(data['M_list'], data['sers'], '-o')
+    plt.title(f"SER vs Modulation order M (fs={data['fs']}, N={data['Nsymbols']}, sps={data['sps']})")
+    plt.xlabel('M (QAM order)'); plt.ylabel('SER (log scale)'); plt.grid(True)
 
-
-def plot_ser_vs_N(fs, M, sps, N_list, ch_pilot_len_bits=128, sync_len_bits=26,
-                  n_trials=80):
+def run_N_sweep(fs, M, sps, N_list, ch_pilot_len_bits, sync_len_bits, n_trials):
     sers = []
     for Nsymbols in N_list:
-        ser, _, _ = monte_carlo_ser(n_trials=n_trials,
-                                    M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
-                                    ch_pilot_len_bits=ch_pilot_len_bits,
-                                    sync_len_bits=sync_len_bits)
+        ser, _, _ = monte_carlo_ser(n_trials=n_trials, M=M, sps=sps, fs=fs, Nsymbols=Nsymbols,
+                                    ch_pilot_len_bits=ch_pilot_len_bits, sync_len_bits=sync_len_bits)
         print(f"INFO: N={Nsymbols} SER={ser:.4e}")
         sers.append(ser)
+    return {'N_list': np.array(N_list), 'sers': np.array(sers), 'fs': fs, 'M': M, 'sps': sps}
+
+def plot_N_results(data):
     plt.figure(figsize=(7, 5))
-    plt.semilogy(N_list, sers, '-o')
-    plt.title(f'SER vs Number of data symbols N (fs={fs}, M={M}, sps={sps})')
-    plt.xlabel('Number of data symbols (N)')
-    plt.ylabel('SER (log scale)')
-    plt.grid(True)
-    plt.show()
-    return np.array(N_list), np.array(sers)
+    plt.semilogy(data['N_list'], data['sers'], '-o')
+    plt.title(f"SER vs Number of data symbols N (fs={data['fs']}, M={data['M']}, sps={data['sps']})")
+    plt.xlabel('Number of data symbols (N)'); plt.ylabel('SER (log scale)'); plt.grid(True)
 
 
 def find_best_params_for_M(M_list, sps_candidates, N_candidates, fs_candidates,
@@ -571,10 +512,10 @@ def find_best_params_for_M(M_list, sps_candidates, N_candidates, fs_candidates,
 
 
 # ------------------------------ Main guard --------------------------------
-if __name__ == "__main__":
+def main():
     # Launch a GUI to select which routines to run and edit their parameters.
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk, messagebox, scrolledtext
     import threading
 
     def parse_list(s, cast=int):
@@ -646,8 +587,43 @@ if __name__ == "__main__":
     r = 0
     r = section('Select which routines to run (tick and edit parameters as needed)', r)
 
+    # --- Global Pluto controls (applies to all runs) ---
+    ttk.Label(mainframe, text='tx_gain (dB):').grid(row=r, column=0, sticky='e')
+    global_tx_gain_entry = ttk.Entry(mainframe, width=10)
+    global_tx_gain_entry.insert(0, str(int(GUI_TX_GAIN)))
+    global_tx_gain_entry.grid(row=r, column=1, sticky='w')
+
+    ttk.Label(mainframe, text='Pluto center freq (MHz):').grid(row=r, column=2, sticky='e')
+    global_cf_entry = ttk.Entry(mainframe, width=12)
+    global_cf_entry.insert(0, str(int(GUI_CENTER_FREQ/1e6)))
+    global_cf_entry.grid(row=r, column=3, columnspan=1, sticky='w')
+    r += 1
+
+    # --- RX Gain Mode Selection ---
+    ttk.Label(mainframe, text='rx_gain_mode:').grid(row=r, column=0, sticky='e')
+    gain_mode_var = tk.StringVar(value=GUI_RX_GAIN_MODE)
+    rx_gain_mode_cb = ttk.Combobox(mainframe, textvariable=gain_mode_var,
+                                   values=('manual', 'slow_attack', 'fast_attack'),
+                                   state='readonly', width=12)
+    rx_gain_mode_cb.grid(row=r, column=1, sticky='w')
+    
+    ttk.Label(mainframe, text='rx_gain (dB):').grid(row=r, column=2, sticky='e')
+    global_rx_gain_entry = ttk.Entry(mainframe, width=12)
+    global_rx_gain_entry.insert(0, str(int(GUI_RX_GAIN)))
+    global_rx_gain_entry.grid(row=r, column=3, sticky='w')
+
+    def on_gain_mode_change(event=None):
+        if gain_mode_var.get() == 'manual':
+            global_rx_gain_entry.config(state='normal')
+        else:
+            global_rx_gain_entry.config(state='disabled')
+
+    rx_gain_mode_cb.bind('<<ComboboxSelected>>', on_gain_mode_change)
+    on_gain_mode_change() # Set initial state
+    r += 1
+
     # ------------------ run_single_frame_demo parameters ------------------
-    run_demo_var = tk.IntVar(value=0)
+    run_demo_var = tk.IntVar(value=1)
     ttk.Checkbutton(mainframe, text='Run single-frame demo', variable=run_demo_var).grid(row=r, column=0, sticky='w', columnspan=2)
     r += 1
 
@@ -669,9 +645,9 @@ if __name__ == "__main__":
     demo_sps.grid(row=r, column=5, sticky='w')
     r += 1
 
-    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs (MHz):').grid(row=r, column=0, sticky='e')
     demo_fs = ttk.Entry(mainframe, width=14)
-    demo_fs.insert(0, str(int(demo_defaults['fs'])))
+    demo_fs.insert(0, str(int(demo_defaults['fs']/1e6)))
     demo_fs.grid(row=r, column=1, sticky='w')
 
     ttk.Label(mainframe, text='sync_barker13 (None or comma list):').grid(row=r, column=2, sticky='e')
@@ -702,9 +678,9 @@ if __name__ == "__main__":
     r += 1
 
     sps_defaults = '1,2,4,8,16'
-    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs (MHz):').grid(row=r, column=0, sticky='e')
     sps_fs = ttk.Entry(mainframe, width=14)
-    sps_fs.insert(0, str(int(1e6)))
+    sps_fs.insert(0, str(1))
     sps_fs.grid(row=r, column=1, sticky='w')
 
     ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
@@ -745,9 +721,9 @@ if __name__ == "__main__":
     ttk.Checkbutton(mainframe, text='Plot SER vs sync length', variable=run_sync_var).grid(row=r, column=0, sticky='w', columnspan=2)
     r += 1
 
-    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs (MHz):').grid(row=r, column=0, sticky='e')
     sync_fs = ttk.Entry(mainframe, width=14)
-    sync_fs.insert(0, str(int(1e6)))
+    sync_fs.insert(0, str(1))
     sync_fs.grid(row=r, column=1, sticky='w')
 
     ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
@@ -788,9 +764,9 @@ if __name__ == "__main__":
     ttk.Checkbutton(mainframe, text='Plot SER vs modulation order M', variable=run_M_var).grid(row=r, column=0, sticky='w', columnspan=2)
     r += 1
 
-    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs (MHz):').grid(row=r, column=0, sticky='e')
     M_fs = ttk.Entry(mainframe, width=14)
-    M_fs.insert(0, str(int(1e6)))
+    M_fs.insert(0, str(1))
     M_fs.grid(row=r, column=1, sticky='w')
 
     ttk.Label(mainframe, text='M list (comma sep):').grid(row=r, column=2, sticky='e')
@@ -831,9 +807,9 @@ if __name__ == "__main__":
     ttk.Checkbutton(mainframe, text='Plot SER vs number of data symbols N', variable=run_N_var).grid(row=r, column=0, sticky='w', columnspan=2)
     r += 1
 
-    ttk.Label(mainframe, text='fs (Hz):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs (MHz):').grid(row=r, column=0, sticky='e')
     N_fs = ttk.Entry(mainframe, width=14)
-    N_fs.insert(0, str(int(1e6)))
+    N_fs.insert(0, str(1))
     N_fs.grid(row=r, column=1, sticky='w')
 
     ttk.Label(mainframe, text='M:').grid(row=r, column=2, sticky='e')
@@ -889,9 +865,9 @@ if __name__ == "__main__":
     search_N_entry.grid(row=r, column=5, sticky='w')
     r += 1
 
-    ttk.Label(mainframe, text='fs candidates (Hz, comma sep):').grid(row=r, column=0, sticky='e')
+    ttk.Label(mainframe, text='fs candidates (MHz, comma sep):').grid(row=r, column=0, sticky='e')
     search_fs_entry = ttk.Entry(mainframe, width=28)
-    search_fs_entry.insert(0, '1000000,2000000')
+    search_fs_entry.insert(0, '1,2')
     search_fs_entry.grid(row=r, column=1, columnspan=3, sticky='w')
 
     ttk.Label(mainframe, text='ch_pilot_len_bits:').grid(row=r, column=4, sticky='e')
@@ -918,111 +894,151 @@ if __name__ == "__main__":
 
     # Run button
     def run_selected():
-        def worker():
+        results_queue = queue.Queue()
+        run_btn.config(state='disabled')
+
+        output_win = tk.Toplevel(root)
+        output_win.title('Run Output')
+        txt = scrolledtext.ScrolledText(output_win, wrap='word', width=100, height=30)
+        txt.pack(fill='both', expand=True)
+        log_queue = queue.Queue()
+
+        def poll_log_queue():
             try:
-                any_run = False
+                while True:
+                    s = log_queue.get_nowait()
+                    txt.insert('end', s)
+                    txt.see('end')
+            except queue.Empty:
+                pass
+            if output_win.winfo_exists():
+                output_win.after(100, poll_log_queue)
+        poll_log_queue()
 
-                # --- single frame demo args ---
+        def worker():
+            import builtins, io, traceback
+            original_print = builtins.print
+            def gui_print(*args, **kwargs):
+                original_print(*args, **kwargs)
+                output_capture = io.StringIO()
+                gui_kwargs = kwargs.copy()
+                gui_kwargs['file'] = output_capture
+                original_print(*args, **gui_kwargs)
+                log_queue.put(output_capture.getvalue())
+            builtins.print = gui_print
+            
+            plot_data = {}
+            try:
+                globals()['GUI_TX_GAIN'] = float(global_tx_gain_entry.get())
+                globals()['GUI_RX_GAIN'] = float(global_rx_gain_entry.get())
+                globals()['GUI_RX_GAIN_MODE'] = gain_mode_var.get()
+                globals()['GUI_CENTER_FREQ'] = float(global_cf_entry.get()) * 1e6
+                
                 if run_demo_var.get():
-                    any_run = True
-                    Nbits_val = int(demo_Nbits.get())
-                    M_val = int(demo_M.get())
-                    sps_val = int(demo_sps.get())
-                    fs_val = float(demo_fs.get())
-                    sync_val = parse_sync_barker(demo_sync.get())
-                    chpilot_val = int(demo_chpilot.get())
-                    seed_str = demo_seed.get().strip()
-                    seed_val = None if seed_str.lower() in ('none', '') else int(seed_str)
-                    pluto_ip_val = demo_pluto_ip.get().strip() or PLUTO_IP
-                    print(f'Running single-frame demo with Nsymbols={Nbits_val}, M={M_val}, sps={sps_val}, fs={fs_val}, sync_barker={sync_val}, chpilot={chpilot_val}, seed={seed_val}, pluto_ip={pluto_ip_val}')
-                    run_single_frame_demo(Nsymbols=Nbits_val, M=M_val, sps=sps_val, fs=fs_val, sync_barker13=sync_val, ch_pilot_len_bits=chpilot_val, seed=seed_val, pluto_ip=pluto_ip_val)
+                    params = {
+                        'Nsymbols': int(demo_Nbits.get()), 'M': int(demo_M.get()), 'sps': int(demo_sps.get()),
+                        'fs': float(demo_fs.get()) * 1e6, 'sync_barker13': parse_sync_barker(demo_sync.get()),
+                        'ch_pilot_len_bits': int(demo_chpilot.get()),
+                        'seed': None if demo_seed.get().strip().lower() in ('none', '') else int(demo_seed.get().strip()),
+                        'pluto_ip': demo_pluto_ip.get().strip() or PLUTO_IP
+                    }
+                    print(f'Running single-frame demo with {params}')
+                    plot_data['single_frame'] = run_single_frame_demo(**params)
 
-                # --- plot SER vs sps args ---
                 if run_sps_var.get():
-                    any_run = True
-                    fs_val = float(sps_fs.get())
-                    M_val = int(sps_M.get())
-                    Nbits_val = int(sps_Nbits.get())
-                    sps_list_val = parse_list(sps_entry.get(), int)
-                    chpilot_val = int(sps_chpilot.get())
-                    sync_len_val = int(sps_synclen.get())
-                    n_trials = int(sps_ntr.get())
-                    print(f'Running plot_ser_vs_sps with fs={fs_val}, M={M_val}, Nsymbols={Nbits_val}, sps_list={sps_list_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
-                    plot_ser_vs_sps(fs=fs_val, M=M_val, Nsymbols=Nbits_val, sps_list=sps_list_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+                    params = {
+                        'fs': float(sps_fs.get()) * 1e6, 'M': int(sps_M.get()), 'Nsymbols': int(sps_Nbits.get()),
+                        'sps_list': parse_list(sps_entry.get(), int), 'ch_pilot_len_bits': int(sps_chpilot.get()),
+                        'sync_len_bits': int(sps_synclen.get()), 'n_trials': int(sps_ntr.get())
+                    }
+                    print(f'Running SER vs SPS sweep with {params}')
+                    plot_data['sps_sweep'] = run_sps_sweep(**params)
 
-                # --- plot SER vs sync length args ---
                 if run_sync_var.get():
-                    any_run = True
-                    fs_val = float(sync_fs.get())
-                    M_val = int(sync_M.get())
-                    Nbits_val = int(sync_Nbits.get())
-                    sync_list_val = parse_list(sync_entry.get(), int)
-                    sps_val = int(sync_sps.get())
-                    chpilot_val = int(sync_chpilot.get())
-                    n_trials = int(sync_ntr.get())
-                    print(f'Running plot_ser_vs_sync_len with fs={fs_val}, M={M_val}, Nsymbols={Nbits_val}, sync_len_list={sync_list_val}, sps={sps_val}, ch_pilot_len_bits={chpilot_val}, n_trials={n_trials}')
-                    plot_ser_vs_sync_len(fs=fs_val, M=M_val, Nsymbols=Nbits_val, sync_len_list=sync_list_val, sps=sps_val, ch_pilot_len_bits=chpilot_val, n_trials=n_trials)
+                    params = {
+                        'fs': float(sync_fs.get()) * 1e6, 'M': int(sync_M.get()), 'Nsymbols': int(sync_Nbits.get()),
+                        'sync_len_list': parse_list(sync_entry.get(), int), 'sps': int(sync_sps.get()),
+                        'ch_pilot_len_bits': int(sync_chpilot.get()), 'n_trials': int(sync_ntr.get())
+                    }
+                    print(f'Running SER vs Sync Length sweep with {params}')
+                    plot_data['sync_len_sweep'] = run_sync_len_sweep(**params)
 
-                # --- plot SER vs M args ---
                 if run_M_var.get():
-                    any_run = True
-                    fs_val = float(M_fs.get())
-                    M_list_val = parse_list(M_entry.get(), int)
-                    Nbits_val = int(M_Nbits.get())
-                    sps_val = int(M_sps.get())
-                    chpilot_val = int(M_chpilot.get())
-                    sync_len_val = int(M_synclen.get())
-                    n_trials = int(M_ntr.get())
-                    print(f'Running plot_ser_vs_M with fs={fs_val}, M_list={M_list_val}, Nsymbols={Nbits_val}, sps={sps_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
-                    plot_ser_vs_M(fs=fs_val, M_list=M_list_val, Nsymbols=Nbits_val, sps=sps_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+                    params = {
+                        'fs': float(M_fs.get()) * 1e6, 'M_list': parse_list(M_entry.get(), int),
+                        'Nsymbols': int(M_Nbits.get()), 'sps': int(M_sps.get()),
+                        'ch_pilot_len_bits': int(M_chpilot.get()), 'sync_len_bits': int(M_synclen.get()),
+                        'n_trials': int(M_ntr.get())
+                    }
+                    print(f'Running SER vs M sweep with {params}')
+                    plot_data['m_sweep'] = run_M_sweep(**params)
 
-                # --- plot SER vs N args ---
                 if run_N_var.get():
-                    any_run = True
-                    fs_val = float(N_fs.get())
-                    M_val = int(N_M.get())
-                    sps_val = int(N_sps.get())
-                    N_list_val = parse_list(N_entry.get(), int)
-                    chpilot_val = int(N_chpilot.get())
-                    sync_len_val = int(N_synclen.get())
-                    n_trials = int(N_ntr.get())
-                    print(f'Running plot_ser_vs_N with fs={fs_val}, M={M_val}, sps={sps_val}, N_list={N_list_val}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}')
-                    plot_ser_vs_N(fs=fs_val, M=M_val, sps=sps_val, N_list=N_list_val, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials)
+                    params = {
+                        'fs': float(N_fs.get()) * 1e6, 'M': int(N_M.get()), 'sps': int(N_sps.get()),
+                        'N_list': parse_list(N_entry.get(), int), 'ch_pilot_len_bits': int(N_chpilot.get()),
+                        'sync_len_bits': int(N_synclen.get()), 'n_trials': int(N_ntr.get())
+                    }
+                    print(f'Running SER vs N sweep with {params}')
+                    plot_data['n_sweep'] = run_N_sweep(**params)
 
-                # --- find_best_params_for_M args ---
                 if run_search_var.get():
-                    any_run = True
-                    M_list_search = parse_list(search_M_entry.get(), int)
-                    sps_cand = parse_list(search_sps_entry.get(), int)
-                    N_cand = parse_list(search_N_entry.get(), int)
-                    fs_cand = parse_list_float(search_fs_entry.get())
-                    chpilot_val = int(search_chpilot.get())
-                    sync_len_val = int(search_synclen.get())
-                    n_trials = int(search_ntr.get())
-                    top_k = int(search_topk.get())
-                    print(f'Running find_best_params_for_M with M_list={M_list_search}, sps_candidates={sps_cand}, N_candidates={N_cand}, fs_candidates={fs_cand}, ch_pilot_len_bits={chpilot_val}, sync_len_bits={sync_len_val}, n_trials={n_trials}, top_k={top_k}')
-                    results = find_best_params_for_M(M_list=M_list_search, sps_candidates=sps_cand, N_candidates=N_cand, fs_candidates=fs_cand, ch_pilot_len_bits=chpilot_val, sync_len_bits=sync_len_val, n_trials=n_trials, top_k=top_k)
-                    print('Best combos (per M):')
+                    params = {
+                        'M_list': parse_list(search_M_entry.get(), int), 'sps_candidates': parse_list(search_sps_entry.get(), int),
+                        'N_candidates': parse_list(search_N_entry.get(), int),
+                        'fs_candidates': [f * 1e6 for f in parse_list_float(search_fs_entry.get())],
+                        'ch_pilot_len_bits': int(search_chpilot.get()), 'sync_len_bits': int(search_synclen.get()),
+                        'n_trials': int(search_ntr.get()), 'top_k': int(search_topk.get())
+                    }
+                    print(f'Running coarse search with {params}')
+                    results = find_best_params_for_M(**params)
+                    print('--- Coarse Search Results ---')
                     for Mkey, combos in results.items():
                         print(f'M={Mkey}')
                         for ser, sps_v, N_v, fs_v, Rs_v in combos:
                             print(f'  SER={ser:.4e} sps={sps_v} N={N_v} fs={fs_v:.2e} Rs={Rs_v:.2f}')
-
-                if not any_run:
-                    messagebox.showinfo('No selection', 'No routines selected — nothing to run.')
-                else:
-                    print('All selected tasks finished. Showing plots (if any).')
-                    try:
-                        plt.show()
-                    except Exception:
-                        pass
+                    print('-----------------------------')
+                
+                results_queue.put(plot_data)
 
             except Exception as e:
-                messagebox.showerror('Error', f'An error occurred: {e}')
-                raise
+                print(f"\n--- An error occurred ---\n{e}")
+                print(traceback.format_exc())
+                results_queue.put({'error': e})
+            finally:
+                builtins.print = original_print
 
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
+        def check_for_results():
+            try:
+                results = results_queue.get_nowait()
+                
+                if 'error' in results:
+                    messagebox.showerror('Error', f"An error occurred in the worker thread: {results['error']}")
+                else:
+                    if not results:
+                        messagebox.showinfo('No selection', 'No routines selected — nothing to run.')
+                    else:
+                        print('\nAll selected tasks finished. Generating plots...')
+                        if 'single_frame' in results:
+                            plot_single_frame_results(results['single_frame'])
+                        if 'sps_sweep' in results:
+                            plot_sps_results(results['sps_sweep'])
+                        if 'sync_len_sweep' in results:
+                            plot_sync_len_results(results['sync_len_sweep'])
+                        if 'm_sweep' in results:
+                            plot_M_results(results['m_sweep'])
+                        if 'n_sweep' in results:
+                            plot_N_results(results['n_sweep'])
+                        
+                        plt.show()
+                
+                run_btn.config(state='normal')
+
+            except queue.Empty:
+                root.after(100, check_for_results)
+
+        threading.Thread(target=worker, daemon=True).start()
+        root.after(100, check_for_results)
 
     run_btn = ttk.Button(mainframe, text='Run selected simulations', command=run_selected)
     run_btn.grid(row=r, column=0, columnspan=3, pady=(12, 0), sticky='w')
@@ -1031,3 +1047,6 @@ if __name__ == "__main__":
     quit_btn.grid(row=r, column=3, columnspan=3, pady=(12, 0), sticky='e')
 
     root.mainloop()
+    
+if __name__=="__main__":
+    main()
