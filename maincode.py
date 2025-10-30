@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import sys
 
 try:
@@ -9,7 +9,7 @@ except ImportError as e:
     # If files are not found, show an error and exit.
     root = tk.Tk()
     root.withdraw() # Hide the main window
-    tk.messagebox.showerror("Import Error", 
+    messagebox.showerror("Import Error", 
         f"Could not find the required script files.\n\n"
         f"Please make sure 'psk_pluto_demo.py' and 'qam_pluto_demo.py' "
         f"are in the same folder as this launcher.\n\nError: {e}")
@@ -21,7 +21,7 @@ def run_selection():
     selection = combo.get()
     
     if not selection:
-        tk.messagebox.showwarning("No Selection", "Please select a modulation type.")
+        messagebox.showwarning("No Selection", "Please select a modulation type.")
         return
 
     # Destroy the launcher window before opening the demo window
