@@ -1,23 +1,3 @@
-"""
-PSK frame simulation & analysis (refactored + heavily commented)
-
-This module simulates frames made of:
-  [sync sequence] [channel pilot] [data symbols]
-where each symbol is NRZ-shaped (repeated sps times), the frame is
-circularly-shifted (to emulate an SDR buffer), passed through a
-random complex scalar channel, optionally AWGN is added, and then
-synchronization + pilot-based channel estimation + equalization is
-performed to recover data symbols.
-
-Main highlights / improvements in this refactor:
-- Added type hints and thorough docstrings for clarity.
-- Added extensive inline comments explaining each step.
-- Added small robustness checks (avoid divide-by-zero on channel estimate).
-- Improved debug printing in `print_snip` (shape, dtype, short sample list).
-- Kept original algorithms (correlation-based sync, pilot averaging).
-- Preserved plotting behaviors in run_single_frame_demo.
-"""
-
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
@@ -26,7 +6,6 @@ from math import ceil
 # Reproducible randomness when the module is imported/run interactively.
 # Individual functions accept seed/rng parameters for repeatability.
 np.random.seed(1)
-
 
 # ---------------- Utility helpers ----------------
 

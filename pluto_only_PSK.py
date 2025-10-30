@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from math import ceil
-import sys
 import queue
 
 # Pluto-only robust channel estimation demo (cleaned)

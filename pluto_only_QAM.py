@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from math import ceil, sqrt
 import time
 import queue
-import sys
 import adi
 
 # Pluto-only QAM version of the robust channel estimation demo
