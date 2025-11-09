@@ -1,0 +1,27 @@
+<!-- templates/result.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Pluto SDR — Jobs started</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 18px; }
+    .file { margin:6px 0; }
+  </style>
+</head>
+<body>
+  <h1>Jobs started</h1>
+  <p>Background jobs were started for the selected tests. They run on the server and will write plots / text results into <code>/static/results/</code>.</p>
+
+  <h2>Started Threads</h2>
+  <ul>
+    {% for j in jobs %}
+      <li><strong>{{ j.description }}</strong> (thread: {{ j.thread_name }})</li>
+    {% endfor %}
+  </ul>
+
+
+  <p><a href="/">Back to control panel</a></p>
+</body>
+</html>
+
