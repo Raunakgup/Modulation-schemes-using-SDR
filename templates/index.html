@@ -1,0 +1,224 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=0.9">
+  <title>Pluto SDR — Full Web GUI (PSK & QAM)</title>
+
+  <style>
+    body { font-family: Arial, sans-serif; margin: 18px; }
+
+    h1 { margin-bottom: 6px }
+    .muted { color:#666; font-size:0.9em; }
+
+    /* Layout: 2 columns side-by-side */
+    .modules-container {
+      display: flex;
+      gap: 20px;
+    }
+
+    .module-box {
+      flex: 1;
+      border: 1px solid #ddd;
+      padding: 14px;
+      border-radius: 6px;
+      max-height: 76vh;
+      overflow-y: auto;
+    }
+
+    .module-box h2, .module-box h3 {
+      border-bottom: 1px solid #eee;
+      padding-bottom: 4px;
+    }
+
+    .line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 6px 0;
+    }
+
+    .line label {
+      width: 48%;
+      font-weight: bold;
+    }
+
+    .line input, .line select {
+      width: 50%;
+      padding: 5px;
+      box-sizing: border-box;
+    }
+
+    .check-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+    }
+
+  </style>
+</head>
+
+<body>
+  <h1>Pluto SDR — Full Control Panel (PSK & QAM)</h1>
+  <p class="muted">Select modulation modules and test options.</p>
+
+  <form action="/run" method="post">
+
+    <!-- Global settings stays full width -->
+    <div style="border:1px solid #ddd; padding:14px; border-radius:6px; margin-bottom:18px;">
+      <h2>Global Pluto Settings</h2>
+
+      <div class="line">
+        <label>TX gain (dB)</label>
+        <input type="number" name="tx_gain" value="-40" step="1">
+      </div>
+
+      <div class="line">
+        <label>RX gain (dB)</label>
+        <input type="number" name="rx_gain" value="0" step="1">
+      </div>
+
+      <div class="line">
+        <label>RX gain mode</label>
+        <select name="rx_gain_mode">
+          <option value="manual">manual</option>
+          <option value="slow_attack">slow_attack</option>
+          <option value="fast_attack">fast_attack</option>
+        </select>
+      </div>
+
+      <div class="line">
+        <label>Center freq (MHz)</label>
+        <input type="number" name="center_freq_mhz" value="915" step="0.1">
+      </div>
+    </div>
+
+    <!-- Side-by-side PSK & QAM -->
+    <div class="modules-container">
+
+      <!-- PSK -->
+      <div class="module-box">
+        <h2>PSK Module</h2>
+
+        <div class="check-line">
+          <input type="checkbox" name="psk_enable" checked>
+          <span>Enable PSK</span>
+        </div>
+
+        <div class="line">
+          <label>Pluto IP / URI</label>
+          <input type="text" name="psk_pluto_ip" value="ip:192.168.2.1">
+        </div>
+
+        <h3>Single-frame demo</h3>
+
+        <div class="check-line">
+          <input type="checkbox" name="psk_run_single_frame">
+          <span>Run single-frame demo</span>
+        </div>
+
+        <div class="line"><label>Nsymbols</label><input type="number" name="psk_sf_Nsymbols" value="4000"></div>
+        <div class="line"><label>M</label><input type="number" name="psk_sf_M" value="16"></div>
+        <div class="line"><label>sps</label><input type="number" name="psk_sf_sps" value="8"></div>
+        <div class="line"><label>fs (MHz)</label><input type="number" name="psk_sf_fs_mhz" value="1"></div>
+        <div class="line"><label>ch pilot length</label><input type="number" name="psk_sf_chpilot" value="128"></div>
+        <div class="line"><label>sync barker</label><input type="text" name="psk_sf_sync" value="None"></div>
+
+        <h3>SPS sweep</h3>
+        <div class="check-line"><input type="checkbox" name="psk_run_sps_sweep"><span>Run SPS sweep</span></div>
+
+        <div class="line"><label>SPS list</label><input type="text" name="psk_sps_list" value="2,4,8"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="psk_sps_ntrials" value="10"></div>
+        <div class="line"><label>fs (MHz)</label><input type="number" name="psk_sps_fs_mhz" value="1"></div>
+
+        <h3>Sync length sweep</h3>
+        <div class="check-line"><input type="checkbox" name="psk_run_sync_len"><span>Run sync-length sweep</span></div>
+
+        <div class="line"><label>sync lengths</label><input type="text" name="psk_sync_len_list" value="26,52"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="psk_sync_ntrials" value="10"></div>
+
+        <h3>M sweep</h3>
+        <div class="check-line"><input type="checkbox" name="psk_run_M_sweep"><span>Run M sweep</span></div>
+
+        <div class="line"><label>M list</label><input type="text" name="psk_M_list" value="2,4,8,16"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="psk_M_ntrials" value="10"></div>
+
+        <h3>N sweep</h3>
+        <div class="check-line"><input type="checkbox" name="psk_run_N_sweep"><span>Run N sweep</span></div>
+
+        <div class="line"><label>N list</label><input type="text" name="psk_N_list" value="1000,2000,4000"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="psk_N_ntrials" value="10"></div>
+
+        <h3>Monte Carlo</h3>
+        <div class="check-line"><input type="checkbox" name="psk_run_montecarlo"><span>Run Monte Carlo</span></div>
+
+        <div class="line"><label>n_trials</label><input type="number" name="psk_mc_ntrials" value="10"></div>
+        <div class="line"><label>M</label><input type="number" name="psk_mc_M" value="16"></div>
+      </div>
+
+
+      <!-- QAM -->
+      <div class="module-box">
+        <h2>QAM Module</h2>
+
+        <div class="check-line">
+          <input type="checkbox" name="qam_enable" checked>
+          <span>Enable QAM</span>
+        </div>
+
+        <div class="line">
+          <label>Pluto IP / URI</label>
+          <input type="text" name="qam_pluto_ip" value="ip:192.168.2.1">
+        </div>
+
+        <h3>Single-frame demo</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_single_frame"><span>Run single-frame demo</span></div>
+
+        <div class="line"><label>Nsymbols</label><input type="number" name="qam_sf_Nsymbols" value="4000"></div>
+        <div class="line"><label>M</label><input type="number" name="qam_sf_M" value="16"></div>
+        <div class="line"><label>sps</label><input type="number" name="qam_sf_sps" value="8"></div>
+        <div class="line"><label>fs (MHz)</label><input type="number" name="qam_sf_fs_mhz" value="1"></div>
+        <div class="line"><label>ch pilot length</label><input type="number" name="qam_sf_chpilot" value="128"></div>
+        <div class="line"><label>sync barker</label><input type="text" name="qam_sf_sync" value="None"></div>
+
+        <h3>SPS sweep</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_sps_sweep"><span>Run SPS sweep</span></div>
+
+        <div class="line"><label>SPS list</label><input type="text" name="qam_sps_list" value="2,4,8"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="qam_sps_ntrials" value="10"></div>
+        <div class="line"><label>fs (MHz)</label><input type="number" name="qam_sps_fs_mhz" value="1"></div>
+
+        <h3>Sync length sweep</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_sync_len"><span>Run sync-length sweep</span></div>
+
+        <div class="line"><label>sync lengths</label><input type="text" name="qam_sync_len_list" value="26,52"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="qam_sync_ntrials" value="10"></div>
+
+        <h3>M sweep</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_M_sweep"><span>Run M sweep</span></div>
+
+        <div class="line"><label>M list</label><input type="text" name="qam_M_list" value="4,16,64"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="qam_M_ntrials" value="10"></div>
+
+        <h3>N sweep</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_N_sweep"><span>Run N sweep</span></div>
+
+        <div class="line"><label>N list</label><input type="text" name="qam_N_list" value="1000,2000,4000"></div>
+        <div class="line"><label>n_trials</label><input type="number" name="qam_N_ntrials" value="10"></div>
+
+        <h3>Monte Carlo</h3>
+        <div class="check-line"><input type="checkbox" name="qam_run_montecarlo"><span>Run Monte Carlo</span></div>
+
+        <div class="line"><label>n_trials</label><input type="number" name="qam_mc_ntrials" value="10"></div>
+        <div class="line"><label>M</label><input type="number" name="qam_mc_M" value="16"></div>
+      </div>
+
+    </div>
+
+    <br>
+    <button type="submit">Start Selected Tests</button>
+
+  </form>
+</body>
+</html>
